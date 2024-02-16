@@ -1,0 +1,492 @@
+---
+title: "1.Preprocessing"
+format: html
+editor: visual
+---
+
+# Preprocessing 10xRNA_H-melanoma-PBMC-gdT-A
+
+## Preparation
+
+### Set Up
+
+Relevant libraries are loaded.
+
+```{r}
+#|output: false
+
+library(Seurat)
+library(tidyverse)
+library(stringr)
+library(patchwork)
+library(ggplot2)
+library(SingleCellExperiment)
+library(scDblFinder)
+library(DESeq2)
+library(scater)
+library(table1)
+```
+
+The path is set to be the code folder including this qmd document. The path might have to be changed.
+
+```{r}
+# Johanne
+path <- "/Volumes/Department/Sund/Public/T-Cell-Signalling-and-Development/VB Lab/10x_data/SpecialProject/10xRNA_H-melanoma-PBMC-gdT/code"
+
+# Helene
+#path <- "o:/Public/T-Cell-Signalling-and-Development/VB Lab/10x_data/SpecialProject/10xRNA_H-melanoma-PBMC-gdT/code"
+
+setwd(path)
+```
+
+### Data Load
+
+The data from all experiments are loaded at once.
+
+```{r}
+sample <- paste("10xRNA_H-melanoma-PBMC-gdT",
+                LETTERS[1:5],
+                sep = "-")
+
+melanoma_pbmc_data <- Read10X(data.dir = paste("../data/raw_data",
+                                               sample,
+                                               "filtered_feature_bc_matrix",
+                                               sep="/"))
+```
+
+The object melanoma_pbmc_data is a list of 2 elements: The gene counts (Gene expression) and the expression of hashtag oligonucleotide (Antibody Capture) for each cell. A Seurat object is created from the gene counts. As we only want to include cells present in both data sets, we first identify the cells in common between the two.
+
+```{r}
+melanoma_joined_cells <- intersect(colnames(melanoma_pbmc_data$`Gene Expression`),
+                                   colnames(melanoma_pbmc_data$`Antibody Capture`))
+
+melanoma_seu_obj <- CreateSeuratObject(counts = melanoma_pbmc_data$`Gene Expression`[ , melanoma_joined_cells],
+                                       #project = sample,
+                                       #min.cells = 3,
+                                       #min.features = 100)
+)
+
+melanoma_seu_obj
+
+# Helene: Consider if min.cells and min.features are what we want.
+# Johanne: The default is 0. I think, we should wait with the filtering.
+```
+
+The data consists of in total 38115 cells expressing together 33694 genes. The sample information is given by the cell identity classes and save in the metadata as well.
+
+```{r}
+table(Idents(melanoma_seu_obj))
+table(melanoma_seu_obj@meta.data$orig.ident)
+
+# Johanne: The number of cells being sequenced are very different between experiments. This corresponds to the numbers reported in the excel sheet by Elisa. Should we worry about this?
+```
+
+### Demultiplexing
+
+The following section follows the guide described in the hashing vignette:
+
+https://satijalab.org/seurat/archive/v3.1/hashing_vignette.html.
+
+We wish to add the hashtag oligo (HTO) data to the Seurat object to identify the response state and the timepoint for each cell. As for the gene counts, we select only the data for relevant cells, that is, cells present in the gene expression data.
+
+```{r}
+melanoma_seu_obj[["HTO"]] <- CreateAssayObject(counts = melanoma_pbmc_data$`Antibody Capture`[ , melanoma_joined_cells])
+```
+
+Before assigning the cells back to their sample origins, the HTO data is normalized using centered log ratio (CLR )transformation, where counts were divided by the geometric mean of an HTO across cells and log-transformed:
+
+$$
+x_i' = \log\frac{x_i}{(\prod_{i=1}^{n} x_i)^{\frac{1}{n}}}
+$$ Here, $x_i$ is the count for a specified HTO in cell $i$, $n$ is the total number of cells.
+
+```{r}
+melanoma_seu_obj <- NormalizeData(melanoma_seu_obj, 
+                                  assay = "HTO", 
+                                  normalization.method = "CLR")
+```
+
+We use the Seurat function HTODemux() to assign single cells to their origin. This function identifies an expression threshold for each HTO to classify cells as either singlets together with their sample-of-origin, doublets and negative cells (empty droplets). The procedure is as follows:
+
+1)  The cells are clustered into $K+1$ clusters, where $K$ is the number of samples (which is 4 in this case).
+
+The following procedure is performed for each HTOs: 
+
+2)  We identified the $K$-medoids cluster with the highest average HTO expression and excluded these cells. That is, we use the cluster with the lowest average value as the negative group to determine a background distribution for each HTO based on “negative” cells. Outliers from this distribution is thought to represent positive signals.
+
+3) The highest 0.5 % HTO expressing cells are excluded from the negative group to get rid of potential outliers. 
+
+4) A negative binomial distribution is fitted to the remaining HTO values. The 0.99 quantile of the distribution is chosen as the HTO-specific threshold.
+
+Afterwards, we can compared the HTO expression for each of the cells. If their expression level for a given HTO exceeds the threshold, they are positive for this HTO. Cells that were positive for only one HTO are classified as singlets. Cells that were positive for two or more HTOs or negative for all HTOs were classified as doublets or negatives, respectively.
+
+The 0.99 quantile for the negative binomial distribution is the default value for the HTODemux function. Lowering
+
+```{r}
+melanoma_seu_obj <- HTODemux(melanoma_seu_obj, 
+                             assay = "HTO", 
+                             positive.quantile = 0.99)
+
+# Johanne: Can we combine lanes when doing demultiplexing? HTODemux will cluster cells from different experiments. Is this a problem?
+```
+
+We look at the number of cells classified as singlets, doublets and negative/ambiguous cells.
+
+```{r}
+table(melanoma_seu_obj$HTO_classification.global)
+```
+
+We take a look at the available metadata.
+
+```{r}
+melanoma_seu_obj@meta.data[1:10, ]
+```
+
+There are a lot of information from the demultiplexing. Information about the output from HTODemux can be found here:
+
+https://www.rdocumentation.org/packages/Seurat/versions/5.0.1/topics/HTODemux
+
+We will chose to keep HTO_classification.global and HTO_maxID. The last mentioned column will be diveded into a response and timepoint variable.
+
+```{r}
+# Splitting the information given by HTO_maxID:
+melanoma_seu_obj[["response"]] <- str_split(melanoma_seu_obj@meta.data$HTO_maxID,
+                                           pattern = "\\.",
+                                           simplify = TRUE)[, 2]
+
+melanoma_seu_obj[["timepoint"]] <- str_split(melanoma_seu_obj@meta.data$HTO_maxID,
+                                           pattern = "\\.",
+                                           simplify = TRUE)[, 3]
+
+# Johanne: Should we remove some of the HTO information? It can be saved in another object, but I am not sure what is the best solution.
+```
+
+We group cells based on the max HTO signal. When expecting the ridgeline plot we see a lot of singlets expressing HTOs for CR + Eval. 
+
+```{r}
+Idents(melanoma_seu_obj) <- "hash.ID"
+RidgePlot(subset(melanoma_seu_obj, orig.ident == 5), 
+          assay = "HTO", 
+          features = rownames(melanoma_seu_obj[["HTO"]]), ncol = 2)
+```
+
+The table below shows where the singlets are comming from. 
+
+```{r}
+melanoma_seu_obj_negatives <- subset(melanoma_seu_obj, HTO_classification.global == "Negative")
+
+table1(data = melanoma_seu_obj_negatives@meta.data, ~ response + timepoint + nCount_RNA + nFeature_RNA | orig.ident)
+```
+
+The singlets are mainly comming from sample 5 CR + Eval. For all other samples, the singlets originates from the same group. We visualize pairs of HTO signals.
+
+```{r}
+qcPlotScatterHTO <- function(data, feature1, feature2){
+  feature_name1 <- str_split(feature1, pattern = "\\.")
+  feature_name2 <- str_split(feature2, pattern = "\\.")
+  FeatureScatter({{data}}, 
+                 feature1 = paste("hto_", feature1, sep = ""),
+                 feature2 = paste("hto_", feature2, sep = ""),
+                 plot.cor = FALSE) +
+    xlab(paste(feature_name1[[1]][2], " + ", feature_name1[[1]][3])) +
+    ylab(paste(feature_name2[[1]][2], " + ", feature_name2[[1]][3])) + 
+    labs(colour = "HTO Classification") +
+    scale_colour_discrete(labels = c("Doublets",
+                                     "PD + Eval",
+                                     "PD + Baseline",
+                                     "CR + Eval",
+                                     "CR + Baseline",
+                                     "Negative")) 
+}
+
+qcPlotScatterHTO(melanoma_seu_obj, "Hu.CR.Baseline", "Hu.CR.Eval")
+qcPlotScatterHTO(melanoma_seu_obj, "Hu.PD.Baseline", "Hu.PD.Eval")
+qcPlotScatterHTO(melanoma_seu_obj, "Hu.CR.Baseline", "PD.Baseline")
+qcPlotScatterHTO(melanoma_seu_obj, "Hu.CR.Eval", "PD.Eval")
+```
+
+There are many cells clustering together with doublets for PD + Baseline vs. PD + Eval though they are classified as CR + Baseline. We compare the number of UMIs for singlets, doublets and negative cells.
+
+```{r}
+Idents(melanoma_seu_obj) <- "HTO_classification.global"
+VlnPlot(melanoma_seu_obj, 
+        features = "nCount_RNA", 
+        pt.size = 0.1,
+        log = TRUE) +
+  xlab("") + 
+  labs(title = "Number of RNA molecules")
+```
+There is not a huge difference between the distribution suggeting that we might consider, if one would sort of doublets and negatives from the HTO classification.
+
+```{r}
+VlnPlot(melanoma_seu_obj, 
+        features = "nFeature_RNA", 
+        pt.size = 0.1,
+        log = TRUE) +
+  xlab("") + 
+  labs(title = "Number of genes")
+```
+  
+Again, the distribution of number of genes per cell do not seem to differ that much between singlets and negative cells.
+
+```{r}
+HTOHeatmap(melanoma_seu_obj, 
+           assay = "HTO",
+           ncells = 10000) +
+    ggtitle("HTO identity") +
+    theme(plot.title = element_text(hjust = 0.5)
+      
+# Johanne: I have included this plot, but I do not feel that I have much to say about it.
+```
+
+### Metadata
+
+The percentage of mitochondrial, ribosomal and hemoglobin content is added.
+
+```{r}
+# Mitochondrial content
+melanoma_seu_obj <- PercentageFeatureSet(melanoma_seu_obj,
+                                pattern = "^MT-",
+                                col.name = "percent_mt")
+
+# Ribosomal content
+melanoma_seu_obj <- PercentageFeatureSet(melanoma_seu_obj,
+                                pattern = "^RP[SL]",
+                                col.name = "percent_ribo")
+
+# Hemoglobin content
+melanoma_seu_obj <- PercentageFeatureSet(melanoma_seu_obj,
+                                pattern = "^HB[^(P)]",
+                                col.name = "percent_hb")
+```
+
+We save the Seurat object before proceeding.
+
+```{r}
+saveRDS(melanoma_seu_obj, file = "melanoma_seu_obj.rds")
+```
+
+## Filtering
+
+```{r}
+melanoma_seu_obj <- readRDS(paste(path,"melanoma_seu_obj.rds", sep=""))
+```
+
+### Cell Hashing
+
+We start out filtering out doublets and negative cells from the HTO information.
+
+```{r}
+melanoma_seu_obj <- subset(melanoma_seu_obj, 
+                           subset = HTO_classification.global == "Singlet")
+
+melanoma_seu_obj
+```
+
+### Quality Control
+
+The following code are customized plot functions for quality control.
+
+```{r}
+qcPlotVln <- function(feature, feature_name, threshold1, threshold2){
+  ggplot(data = melanoma_seu_obj@meta.data,
+         mapping = aes(x = orig.ident,
+                     y = {{feature}})) +
+  geom_violin(colour = "#6699CC",
+              fill = "#6699CC",
+              alpha = 0.2) +
+  geom_jitter(size = 0.1,
+              alpha = 0.2) + 
+  scale_x_discrete(labels = LETTERS[1:5]) + 
+  xlab("Sample") + 
+  ylab(feature_name) + 
+  labs(title = paste("Distribution of", tolower(feature_name), "across samples",
+                     sep = " ")) +
+  #facet_wrap(~reponse) + 
+  theme_bw() + 
+  geom_hline(yintercept = c(threshold1, threshold2),
+             colour = "#CC3333")
+}
+
+qcPlotDens <- function(feature, feature_name, threshold1, threshold2){
+  ggplot(data = melanoma_seu_obj@meta.data,
+         mapping = aes(x = {{feature}},
+                       fill = orig.ident)) +
+  geom_density(alpha = 0.2) +
+  scale_x_log10() +
+  xlab(feature_name) + 
+  ylab("Density") + 
+  labs(title = paste("Distribution of", tolower(feature_name), "across samples",
+                     sep = " "),
+       fill = "Sample") +
+  scale_fill_discrete(labels = LETTERS[1:5]) + 
+  #facet_wrap(~reponse) + 
+  theme_bw() + 
+  geom_vline(xintercept = c(threshold1, threshold2),
+             colour = "#CC3333")
+}
+
+# Johanne: When including the face_wrap, we see very few genes for one CR responders in sample A!
+```
+
+```{r}
+qcPlotVln(nFeature_RNA, "Number of genes", 100, 3000)
+qcPlotVln(nCount_RNA, "Number of molecules", 500, 12500)
+qcPlotVln(percent_mt, "Mitochondrial content (%)", NULL, 10)
+qcPlotVln(percent_ribo, "Ribosomal content (%)", NULL, NULL)
+qcPlotVln(percent_hb, "Hemoglobin content (%)", NULL, NULL)
+
+qcPlotDens(nFeature_RNA, "Number of genes", 100, 3000)
+qcPlotDens(nCount_RNA, "Number of molecules", 500, 12500)
+qcPlotDens(percent_mt, "Mitochondrial content (%)", NULL, 10)
+qcPlotDens(percent_ribo, "Ribosomal content (%)", NULL, NULL)
+qcPlotDens(percent_hb, "Hemoglobin content (%)", NULL, NULL)
+
+```
+
+ADD CORRELATION???
+
+```{r}
+qcPlotScatter <- function(data, feature1, feature2, feature_name){
+  ggplot(data = {{data}}@meta.data,
+         mapping = aes(x = {{feature1}},
+                       y = {{feature2}},
+                       colour = orig.ident)) +
+  geom_point(alpha = 0.5) +
+  #facet_wrap(~orig.ident) +
+  xlab(feature_name[1]) + 
+  ylab(feature_name[2]) + 
+  labs(title = paste(feature_name[1], "vs.", tolower(feature_name[2]),
+                     sep = " "),
+       colour = "Sample") +
+  scale_colour_discrete(labels = LETTERS[1:5]) + 
+  #stat_cor(method = "pearson", label.x = 10000, label.y = 3000)
+  theme_bw() 
+}
+
+qcPlotScatter(melanoma_seu_obj, nCount_RNA, nFeature_RNA, c("Number of molecules", "Number of genes"))
+```
+
+Filter the cells based on our QC metrics.
+
+Consider to filter out ribosomal genes.
+
+```{r}
+melanoma_seu_obj_filtered <- subset(melanoma_seu_obj,
+                  subset = nFeature_RNA > 100 & nFeature_RNA < 3000 & nCount_RNA > 500 & nCount_RNA < 12500 & percent_mt < 10)
+
+melanoma_seu_obj_filtered <- melanoma_seu_obj_filtered[!grepl('^RP[SL]', rownames(melanoma_seu_obj_filtered)), ]
+```
+
+```{r}
+qcPlotScatter(melanoma_seu_obj_filtered, nCount_RNA, nFeature_RNA, c("Number of molecules", "Number of genes"))
+```
+
+CHANGE PLOT FUNCTIONS TO HAVE DATA AS INPUT.
+
+## Standard seurat workflow
+
+### Normalize data
+
+```{r}
+melanoma_seu_obj_filtered <- NormalizeData(melanoma_seu_obj_filtered,
+                                           normalization.method = "LogNormalize",
+                                           scale.factor = 10000)
+```
+
+### Find highly variable features
+
+```{r}
+melanoma_seu_obj_filtered <- FindVariableFeatures(melanoma_seu_obj_filtered,
+                                                  selection.method = "vst",
+                                                  nfeatures = 2000)
+
+top10 <- head(VariableFeatures(melanoma_seu_obj_filtered), 10)
+
+plot_feature <- VariableFeaturePlot(melanoma_seu_obj_filtered)
+plot_label <- LabelPoints(plot = plot_feature, points = top10, repel = TRUE)
+plot_label
+
+#ggsave("plot_varfeature.png", plot2, path= "Plots/QC")
+
+```
+
+### Scale data
+
+```{r}
+melanoma_seu_obj_filtered <- ScaleData(melanoma_seu_obj_filtered,
+                                       features = VariableFeatures(object = melanoma_seu_obj_filtered))
+
+```
+
+### Linear dimensional reduction and visualization
+
+```{r}
+melanoma_seu_obj_filtered <- RunPCA(melanoma_seu_obj_filtered,
+                                    features = VariableFeatures(object = melanoma_seu_obj_filtered))
+ElbowPlot(melanoma_seu_obj_filtered, reduction = "pca")
+
+
+```
+
+```{r}
+melanoma_seu_obj_filtered <- RunUMAP(melanoma_seu_obj_filtered, dims = 1:30)
+```
+
+```{r}
+DimPlot(melanoma_seu_obj_filtered, reduction = "umap")
+```
+
+```{r}
+saveRDS(melanoma_seu_obj_filtered, file = "melanoma_seu_obj_filtered.rds")
+```
+
+## Find doublets
+
+```{r}
+# Convert your seurat object to a sce object.
+melanoma_sce <- as.SingleCellExperiment(melanoma_seu_obj_filtered)
+```
+
+```{r}
+melanoma_sce_top.var <- VariableFeatures(melanoma_seu_obj_filtered)
+
+melanoma_sce_dbl.dens <- computeDoubletDensity(melanoma_sce,
+                                       subset.row = melanoma_sce_top.var,
+                                       d = ncol(reducedDim(melanoma_sce)))
+
+melanoma_sce$DoubletScore <- melanoma_sce_dbl.dens
+
+melanoma_sce_dbl.calls <- doubletThresholding(data.frame(score = melanoma_sce_dbl.dens),
+                                      method ="griffiths",
+                                      returnType ="call")
+
+summary(melanoma_sce_dbl.calls)
+```
+
+```{r}
+plotUMAP(melanoma_sce, colour_by="DoubletScore")
+```
+
+```{r}
+# Extract singlet cell indices
+melanoma_singlet_indices <- which(melanoma_sce_dbl.calls == "singlet")
+
+# Filter out doublets from the original Seurat object
+melanoma_seu_obj_preproc <- melanoma_seu_obj_filtered[, melanoma_singlet_indices]
+
+saveRDS(melanoma_seu_obj_preproc, paste(path, "melanoma_seu_obj_preprocessed.rds", sep = ""))
+```
+
+Consider to remove genes that are not expressed in at least xx cells
+
+```{r}
+# Extract counts
+counts_cell <- GetAssayData(object = melanoma_seu_obj_preproc,
+                            slot = "counts")
+# Output a logical matrix specifying for each gene on whether or not there are more than zero counts per cell
+nonzero <- counts_cell > 0
+
+keep_genes <- Matrix::rowSums(nonzero) >= 4
+
+filtered_counts <- counts_cell[keep_genes, ]
+```
