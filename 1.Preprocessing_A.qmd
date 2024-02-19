@@ -60,11 +60,7 @@ The object melanoma_pbmc_data is a list of 2 elements: The gene counts (Gene exp
 melanoma_joined_cells <- intersect(colnames(melanoma_pbmc_data$`Gene Expression`),
                                    colnames(melanoma_pbmc_data$`Antibody Capture`))
 
-melanoma_seu_obj <- CreateSeuratObject(counts = melanoma_pbmc_data$`Gene Expression`[ , melanoma_joined_cells],
-                                       #project = sample,
-                                       #min.cells = 3,
-                                       #min.features = 100)
-)
+melanoma_seu_obj <- CreateSeuratObject(counts = melanoma_pbmc_data$`Gene Expression`[ , melanoma_joined_cells], min.cells = 3)
 
 melanoma_seu_obj
 
@@ -109,13 +105,13 @@ We use the Seurat function HTODemux() to assign single cells to their origin. Th
 
 1)  The cells are clustered into $K+1$ clusters, where $K$ is the number of samples (which is 4 in this case).
 
-The following procedure is performed for each HTOs: 
+The following procedure is performed for each HTOs:
 
 2)  We identified the $K$-medoids cluster with the highest average HTO expression and excluded these cells. That is, we use the cluster with the lowest average value as the negative group to determine a background distribution for each HTO based on “negative” cells. Outliers from this distribution is thought to represent positive signals.
 
-3) The highest 0.5 % HTO expressing cells are excluded from the negative group to get rid of potential outliers. 
+3)  The highest 0.5 % HTO expressing cells are excluded from the negative group to get rid of potential outliers.
 
-4) A negative binomial distribution is fitted to the remaining HTO values. The 0.99 quantile of the distribution is chosen as the HTO-specific threshold.
+4)  A negative binomial distribution is fitted to the remaining HTO values. The 0.99 quantile of the distribution is chosen as the HTO-specific threshold.
 
 Afterwards, we can compared the HTO expression for each of the cells. If their expression level for a given HTO exceeds the threshold, they are positive for this HTO. Cells that were positive for only one HTO are classified as singlets. Cells that were positive for two or more HTOs or negative for all HTOs were classified as doublets or negatives, respectively.
 
@@ -160,7 +156,7 @@ melanoma_seu_obj[["timepoint"]] <- str_split(melanoma_seu_obj@meta.data$HTO_maxI
 # Johanne: Should we remove some of the HTO information? It can be saved in another object, but I am not sure what is the best solution.
 ```
 
-We group cells based on the max HTO signal. When expecting the ridgeline plot we see a lot of singlets expressing HTOs for CR + Eval. 
+We group cells based on the max HTO signal. When expecting the ridgeline plot we see a lot of singlets expressing HTOs for CR + Eval.
 
 ```{r}
 Idents(melanoma_seu_obj) <- "hash.ID"
@@ -169,7 +165,7 @@ RidgePlot(subset(melanoma_seu_obj, orig.ident == 5),
           features = rownames(melanoma_seu_obj[["HTO"]]), ncol = 2)
 ```
 
-The table below shows where the singlets are comming from. 
+The table below shows where the singlets are comming from.
 
 ```{r}
 melanoma_seu_obj_negatives <- subset(melanoma_seu_obj, HTO_classification.global == "Negative")
@@ -215,6 +211,7 @@ VlnPlot(melanoma_seu_obj,
   xlab("") + 
   labs(title = "Number of RNA molecules")
 ```
+
 There is not a huge difference between the distribution suggeting that we might consider, if one would sort of doublets and negatives from the HTO classification.
 
 ```{r}
@@ -225,7 +222,7 @@ VlnPlot(melanoma_seu_obj,
   xlab("") + 
   labs(title = "Number of genes")
 ```
-  
+
 Again, the distribution of number of genes per cell do not seem to differ that much between singlets and negative cells.
 
 ```{r}
