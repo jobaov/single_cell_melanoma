@@ -411,9 +411,13 @@ print(paste("Cells removed: ",
       sep = ""))
 ```
 
-## Find doublets
+## Doublet Identification
 
-We wish to identify doublets using the scDblFinder package, which gathers various methods for the detection and handling of doublets. We will use the computeDoubletDensity approach, where we obtain a doublet score for each cell based on the density of simulated doublets around it. Before doublet detection, we must normalize and find variable features according to the standard Seurat workflow. 
+We wish to identify doublets using the scDblFinder package, which gathers various methods for the detection and handling of doublets. We will use the computeDoubletDensity approach, where we obtain a doublet score for each cell based on the density of simulated doublets around it. 
+
+### Normalization and Identification of Highly Variable Features
+
+Before doublet detection, we must normalize and find variable features according to the standard Seurat workflow. 
 
 ```{r}
 # Normalize
@@ -429,7 +433,9 @@ melanoma_seu_obj_filtered <- ScaleData(melanoma_seu_obj_filtered,
                                        features = VariableFeatures(object = melanoma_seu_obj_filtered))
 ```
 
-To visualize the data in an UMAP plot, linear dimensional reduction is performed.
+### Dimensionality Reduction
+
+To visualize the data in an UMAP plot later on, linear dimensional reduction is performed. 
 
 ```{r}
 melanoma_seu_obj_filtered <- RunPCA(melanoma_seu_obj_filtered,
@@ -461,29 +467,88 @@ We convert the seurat object to a sce object and save the variable features to b
 ```{r}
 melanoma_sce <- as.SingleCellExperiment(melanoma_seu_obj_filtered)
 
-melanoma_sce_top.var <- VariableFeatures(melanoma_seu_obj_filtered)
+melanoma_sce_top_var <- VariableFeatures(melanoma_seu_obj_filtered)
 ```
 
-Doublet scores are computed with computeDoubletDensity.
+### Doublet Score
 
-EPLAINATION FOR THIS. 
+Doublet scores are computed with computeDoubletDensity described in
+
+https://rdrr.io/github/plger/scDblFinder/man/computeDoubletDensity.html
+
+The procedure is as follows:
+
+1) A number of doublets (controlled by the parameter "niters" computeDoubletDensity) are simulated by adding the count vectors for two randomly chosen cells in the count matrix.
+
+2) In a low-dimensional space after a PCA on the log-normalized expression matrix, the density of neighboring artificial doublets for each cell is computed and compared to the density of neighboring original cells to yield a doublet score.
 
 ```{r}
-melanoma_sce_dbl.dens <- computeDoubletDensity(melanoma_sce,
-                                       subset.row = melanoma_sce_top.var,
-                                       d = ncol(reducedDim(melanoma_sce)))
+melanoma_sce_dbl_dens <- computeDoubletDensity(melanoma_sce,
+                                               subset.row = melanoma_sce_top_var,
+                                               d = ncol(reducedDim(melanoma_sce)))
 
-melanoma_sce$DoubletScore <- melanoma_sce_dbl.dens
-
-melanoma_sce_dbl.calls <- doubletThresholding(data.frame(score = melanoma_sce_dbl.dens),
-                                      method ="griffiths",
-                                      returnType ="call")
-
-summary(melanoma_sce_dbl.calls)
+melanoma_sce$DoubletScore <- melanoma_sce_dbl_dens
 ```
+
+We visualize the cells in a UMAP plot colored by the doublet score. 
 
 ```{r}
 plotUMAP(melanoma_sce, colour_by="DoubletScore")
+```
+
+As expected, cells with a high doublet score tend to cluster together. 
+
+### Doublet Thresholding
+
+We use doubletThresholding to establish a threshold for the doublet score to call the doublets.
+
+```{r}
+melanoma_sce_dbl_calls <- doubletThresholding(data.frame(score = melanoma_sce_dbl_dens),
+                                              method ="griffiths",
+                                              returnType ="call")
+
+print(paste("Singlets: ", 
+            summary(melanoma_sce_dbl_calls)[1], 
+            " (",
+            round(summary(melanoma_sce_dbl_calls)[1]/length(melanoma_sce_dbl_calls) * 100, 
+                  digits = 4),
+            "%)",
+      sep = ""))
+
+print(paste("Doublets: ", 
+            summary(melanoma_sce_dbl_calls)[2], 
+            " (",
+            round(summary(melanoma_sce_dbl_calls)[2]/length(melanoma_sce_dbl_calls) * 100, 
+                  digits = 4),
+            "%)",
+      sep = ""))
+```
+
+The amount of doublets seems reasonable. We add the classification to the metadata.
+
+```{r}
+names(melanoma_sce_dbl_calls) <- colnames(melanoma_sce)
+
+melanoma_seu_obj_filtered <- AddMetaData(object = melanoma_seu_obj_filtered,
+                                         metadata = melanoma_sce_dbl_calls,
+                                         col.name = "doublet_call")
+```
+
+Let us look at the results.
+
+```{r}
+# We call many doublets in HTO classification compared to doublet finder.
+table(melanoma_seu_obj_filtered@meta.data$doublet_call, melanoma_seu_obj_filtered@meta.data$HTO_classification.global)
+
+# There are more doublets than singlets for some patients.
+# Negatives are mainly comming from patient 4 and 5. 
+table(melanoma_seu_obj_filtered@meta.data$HTO_classification.global, melanoma_seu_obj_filtered@meta.data$patient_id)
+
+# Removing close to equal proportion of cells
+table(melanoma_seu_obj_filtered@meta.data$doublet_call, melanoma_seu_obj_filtered@meta.data$patient_id)
+
+# Removing close to equal proportion of cells. Shouldn't the rate of doublets be the same across experiments. 
+table(melanoma_seu_obj_filtered@meta.data$doublet_call, melanoma_seu_obj_filtered@meta.data$orig.ident)
 ```
 
 ```{r}
@@ -511,14 +576,3 @@ melanoma_seu_obj
 
 Consider to remove genes that are not expressed in at least xx cells
 
-```{r}
-# Extract counts
-counts_cell <- GetAssayData(object = melanoma_seu_obj_preproc,
-                            slot = "counts")
-# Output a logical matrix specifying for each gene on whether or not there are more than zero counts per cell
-nonzero <- counts_cell > 0
-
-keep_genes <- Matrix::rowSums(nonzero) >= 4
-
-filtered_counts <- counts_cell[keep_genes, ]
-```
