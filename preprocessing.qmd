@@ -1,12 +1,12 @@
 ---
-title: "1.Preprocessing"
+title: "Preprocessing 10xRNA_H-melanoma-PBMC-gdT-A"
 format: html
 editor: visual
 ---
 
-# Preprocessing 10xRNA_H-melanoma-PBMC-gdT-A
-
 ## Preparation
+
+In the following section, the single cell data is loaded to create a Seurat object including both gene expression data and hashtag oligo data. Relevant metadata is added.
 
 ### Set Up
 
@@ -28,11 +28,13 @@ library(table1)
 library(readxl)
 ```
 
-The path is set to be the code folder including this qmd document. The path might have to be changed.
+Define the path to get the data and save results. The path might have to be changed.
 
 ```{r}
 # Johanne
 data_path <- "/Volumes/Department/Sund/Public/T-Cell-Signalling-and-Development/VB Lab/10x_data/SpecialProject/10xRNA_H-melanoma-PBMC-gdT/data"
+
+results_path <- "/Volumes/Department/Sund/Public/T-Cell-Signalling-and-Development/VB Lab/10x_data/SpecialProject/10xRNA_H-melanoma-PBMC-gdT/results/preprocessing"
 
 # Helene
 #path <- "o:/Public/T-Cell-Signalling-and-Development/VB Lab/10x_data/SpecialProject/10xRNA_H-melanoma-PBMC-gdT/code"
@@ -54,7 +56,7 @@ melanoma_pbmc_data <- Read10X(data.dir = paste(data_path,
                                                sep="/"))
 ```
 
-The object melanoma_pbmc_data is a list of 2 elements: The gene counts (Gene expression) and the expression of hashtag oligonucleotide (Antibody Capture) for each cell. A Seurat object is created from the gene counts. As we only want to include cells present in both data sets, we first identify the cells in common between the two.
+The object melanoma_pbmc_data is a list of 2 elements: The gene counts (Gene expression) and the expression of hashtag oligonucleotide (Antibody Capture) for each cell. A Seurat object is created from the gene counts. As we only want to include cells present in both data sets, we first identify the cells in common between the two. Furthermore, we will only include genes detected in at least 3 cells.
 
 ```{r}
 melanoma_joined_cells <- intersect(colnames(melanoma_pbmc_data$`Gene Expression`),
@@ -77,7 +79,7 @@ table(melanoma_seu_obj@meta.data$orig.ident)
 
 The following section follows the guide described in the hashing vignette:
 
-https://satijalab.org/seurat/archive/v3.1/hashing_vignette.html.
+<https://satijalab.org/seurat/archive/v3.1/hashing_vignette.html>
 
 We wish to add the hashtag oligo (HTO) data to the Seurat object to identify the response state and the timepoint for each cell. As for the gene counts, we select only the data for relevant cells, that is, cells present in the gene expression data.
 
@@ -89,7 +91,7 @@ Before assigning the cells back to their sample origins, the HTO data is normali
 
 $$
 x_i' = \log\frac{x_i}{(\prod_{i=1}^{n} x_i)^{\frac{1}{n}}}
-$$ 
+$$
 
 Here, $x_i$ is the count for a specified HTO in cell $i$, $n$ is the total number of cells.
 
@@ -127,7 +129,7 @@ We look at the number of cells classified as singlets, doublets and negative/amb
 table(melanoma_seu_obj$HTO_classification.global)
 ```
 
-We take a look at the available metadata.
+We take a look at the available metadata after HTODemux.
 
 ```{r}
 melanoma_seu_obj@meta.data[1:10, ]
@@ -135,7 +137,7 @@ melanoma_seu_obj@meta.data[1:10, ]
 
 There are a lot of information from the demultiplexing. Information about the output from HTODemux can be found here:
 
-https://www.rdocumentation.org/packages/Seurat/versions/5.0.1/topics/HTODemux
+<https://www.rdocumentation.org/packages/Seurat/versions/5.0.1/topics/HTODemux>
 
 We will chose to focus on HTO_classification.global and HTO_maxID. The last mentioned column will be divided into a response and timepoint variable.
 
@@ -154,20 +156,49 @@ We group cells based on the max HTO signal. When expecting the ridgeline plot we
 
 ```{r}
 Idents(melanoma_seu_obj) <- "hash.ID"
-RidgePlot(melanoma_seu_obj, #subset(melanoma_seu_obj, orig.ident == 5), 
-          assay = "HTO", 
-          features = rownames(melanoma_seu_obj[["HTO"]]), ncol = 2)
+
+# Overall ridgeplot
+ridgeplot_overall <- RidgePlot(melanoma_seu_obj,
+                               assay = "HTO",
+                               features = rownames(melanoma_seu_obj[["HTO"]]),
+                               ncol = 2)
+
+ggsave(filename = "ridgeplot_overall.png",
+       path = results_path,
+       plot = ridgeplot_overall)
+
+# Individual sample ridgeplot
+for (i in 1:5){
+  ridgeplot_sample <- RidgePlot(subset(melanoma_seu_obj, orig.ident == i),
+                                assay = "HTO",
+                                features = rownames(melanoma_seu_obj[["HTO"]]),
+                                ncol = 2)
+  
+  ggsave(filename = paste("ridgeplot_sample", LETTERS[i], ".png", sep = ""),
+         path = results_path,
+         plot = ridgeplot_sample)
+}
+
+ridgeplot_overall
 ```
 
-The table below shows where the singlets are comming from.
+The table below shows where the negatives are comming from.
 
 ```{r}
 melanoma_seu_obj_negatives <- subset(melanoma_seu_obj, HTO_classification.global == "Negative")
 
-table1(data = melanoma_seu_obj_negatives@meta.data, ~ response + timepoint + nCount_RNA + nFeature_RNA | orig.ident)
+table1(data = melanoma_seu_obj_negatives@meta.data, ~ response + timepoint + HTO_maxID + nCount_RNA + nFeature_RNA | orig.ident)
 ```
 
-The singlets are mainly comming from sample 5 CR + Eval. For all other samples, the singlets originates from the same group. We visualize pairs of HTO signals.
+The negatives are mainly comming from sample 5 CR + Eval. For all other samples, the negatives originates from the same group. Overall, 97.5 % of negative cells seems to be CR + Eval. Thus, we would be careful about removing these cells, as we will be biased towards this condition. The table below shows where the doublets are comming from.
+
+```{r}
+melanoma_seu_obj_doublets <- subset(melanoma_seu_obj, HTO_classification.global == "Doublet")
+
+table1(data = melanoma_seu_obj_doublets@meta.data, ~ response + timepoint + HTO_maxID + nCount_RNA + nFeature_RNA | orig.ident)
+```
+
+Overall, the doublelts seem to be more evenly distributed among the different conditions. We visualize pairs of HTO signals.
 
 ```{r}
 qcPlotScatterHTO <- function(data, feature1, feature2){
@@ -188,13 +219,42 @@ qcPlotScatterHTO <- function(data, feature1, feature2){
                                      "Negative")) 
 }
 
-qcPlotScatterHTO(melanoma_seu_obj, "Hu.CR.Baseline", "Hu.CR.Eval")
-qcPlotScatterHTO(melanoma_seu_obj, "Hu.PD.Baseline", "Hu.PD.Eval")
-qcPlotScatterHTO(melanoma_seu_obj, "Hu.CR.Baseline", "Hu.PD.Baseline")
-qcPlotScatterHTO(melanoma_seu_obj, "Hu.CR.Eval", "Hu.PD.Eval")
+scatterplot_CR_baselineVSeval <- qcPlotScatterHTO(melanoma_seu_obj,
+                                                  "Hu.CR.Baseline",
+                                                  "Hu.CR.Eval")
+
+scatterplot_PD_baselineVSeval <- qcPlotScatterHTO(melanoma_seu_obj,
+                                                  "Hu.PD.Baseline",
+                                                  "Hu.PD.Eval")
+
+scatterplot_baseline_crVSpd <- qcPlotScatterHTO(melanoma_seu_obj,
+                                                "Hu.CR.Baseline",
+                                                "Hu.PD.Baseline")
+
+scatterplot_eval_crVSpd <- qcPlotScatterHTO(melanoma_seu_obj, 
+                                            "Hu.CR.Eval", 
+                                            "Hu.PD.Eval")
+
+ggsave(filename = "scatterplot_CR_baselineVSeval.png",
+         path = results_path,
+         plot = scatterplot_CR_baselineVSeval)
+
+ggsave(filename = "scatterplot_PD_baselineVSeval.png",
+         path = results_path,
+         plot = scatterplot_PD_baselineVSeval)
+
+ggsave(filename = "scatterplot_baseline_crVSpd.png",
+         path = results_path,
+         plot = scatterplot_baseline_crVSpd)
+
+ggsave(filename = "scatterplot_eval_crVSpd.png",
+         path = results_path,
+         plot = scatterplot_eval_crVSpd)
+
+scatterplot_CR_baselineVSeval
 ```
 
-There are many cells clustering together with doublets for PD + Baseline vs. PD + Eval though they are classified as CR + Baseline. This suggest that additional tools are nessesary for identifying doublets. We compare the number of UMIs for singlets, doublets and negative cells.
+There are many cells clustering together with doublets for CR + Baseline vs. CR + Eval though they are classified as CR + Baseline. This suggest that additional tools are nessesary for identifying doublets. We compare the number of UMIs for singlets, doublets and negative cells.
 
 ```{r}
 Idents(melanoma_seu_obj) <- "HTO_classification.global"
@@ -254,7 +314,7 @@ We add the patient ID from the HTODemux results. First, the sample information i
 
 ```{r}
 sample_info <- read_xlsx("sample_info.xlsx")
-sample_info
+sample_info[1:10, ]
 ```
 
 We match the response and timepoint with the sample to get the patient ID. The patient ID is then added to the metadata.
@@ -278,7 +338,7 @@ melanoma_seu_obj <- AddMetaData(object = melanoma_seu_obj,
                                 col.name = "patient_id")
 ```
 
-We save the Seurat object before proceeding.
+We save the Seurat object before proceeding with the filtering.
 
 ```{r}
 saveRDS(melanoma_seu_obj, file = paste(data_path, 
@@ -288,8 +348,12 @@ saveRDS(melanoma_seu_obj, file = paste(data_path,
 
 ## Filtering
 
+The goal of filtering is to only include true cells that are of high quality based on the quality metrics generated in the prevoius section. First, the Seurat object is loaded to the enviroment.
+
 ```{r}
-melanoma_seu_obj <- readRDS(paste(path,"melanoma_seu_obj.rds", sep=""))
+melanoma_seu_obj <- readRDS(paste(data_path,
+                                  "seurat_data/melanoma_seu_obj.rds", 
+                                  sep="/"))
 ```
 
 ### Quality Control
@@ -341,20 +405,79 @@ qcPlotDens <- function(seu_obj, feature, feature_name, threshold1, threshold2){
 We inspect the distribution for different variables in the metadata to decide the filtering thresholds.
 
 ```{r}
-qcPlotVln(melanoma_seu_obj, nFeature_RNA, "Number of genes", 100, 3000)
-qcPlotVln(melanoma_seu_obj, nCount_RNA, "Number of molecules", 500, 12500)
-qcPlotVln(melanoma_seu_obj, percent_mt, "Mitochondrial content (%)", NULL, 10)
-qcPlotVln(melanoma_seu_obj, percent_ribo, "Ribosomal content (%)", NULL, NULL)
-qcPlotVln(melanoma_seu_obj, percent_hb, "Hemoglobin content (%)", NULL, NULL)
+# Generate violin plots
+vlnplot_gene <- qcPlotVln(melanoma_seu_obj,
+                          nFeature_RNA,
+                          "Number of genes",
+                          300, 3000)
+vlnplot_mole <- qcPlotVln(melanoma_seu_obj,
+                          nCount_RNA,
+                          "Number of molecules",
+                          500, 12500)
+vlnplot_mito <- qcPlotVln(melanoma_seu_obj, 
+                          percent_mt, 
+                          "Mitochondrial content (%)", 
+                          NULL, 10)
+vlnplot_ribo <- qcPlotVln(melanoma_seu_obj, 
+                          percent_ribo, 
+                          "Ribosomal content (%)", 
+                          NULL, NULL)
+vlnplot_hemo <- qcPlotVln(melanoma_seu_obj, 
+                          percent_hb, 
+                          "Hemoglobin content (%)", 
+                          NULL, NULL)
+# Generate density plots
+densplot_gene <- qcPlotDens(melanoma_seu_obj, 
+                            nFeature_RNA, 
+                            "Number of genes", 
+                            300, 3000)
+densplot_mole <- qcPlotDens(melanoma_seu_obj, 
+                            nCount_RNA, 
+                            "Number of molecules", 
+                            500, 12500)
+densplot_mito <- qcPlotDens(melanoma_seu_obj, 
+                            percent_mt, 
+                            "Mitochondrial content (%)", 
+                            NULL, 10)
+densplot_ribo <- qcPlotDens(melanoma_seu_obj, 
+                            percent_ribo, 
+                            "Ribosomal content (%)", 
+                            NULL, NULL)
+densplot_hemo <- qcPlotDens(melanoma_seu_obj, 
+                            percent_hb, 
+                            "Hemoglobin content (%)", 
+                            NULL, NULL)
 
-qcPlotDens(melanoma_seu_obj, nFeature_RNA, "Number of genes", 100, 3000)
-qcPlotDens(melanoma_seu_obj, nCount_RNA, "Number of molecules", 500, 12500)
-qcPlotDens(melanoma_seu_obj, percent_mt, "Mitochondrial content (%)", NULL, 10)
-qcPlotDens(melanoma_seu_obj, percent_ribo, "Ribosomal content (%)", NULL, NULL)
-qcPlotDens(melanoma_seu_obj, percent_hb, "Hemoglobin content (%)", NULL, NULL)
+# Save plots
+vlnplot <- list(vlnplot_gene, vlnplot_mole, vlnplot_mito, vlnplot_ribo, vlnplot_hemo)
+densplot <- list(densplot_gene, densplot_mole, densplot_mito, densplot_ribo, densplot_hemo)
+metric <- c("gene", "mole", "mito", "ribo", "hemo")
+vlnplot_name <- paste("vlnplot_", metric, ".png", sep = "")
+densplot_name <- paste("densplot_", metric, ".png", sep = "")
+
+for (i in 1:5){
+  ggsave(filename = vlnplot_name[i],
+         path = results_path,
+         plot = vlnplot[[i]])
+  ggsave(filename = densplot_name[i],
+         path = results_path,
+         plot = densplot[[i]])
+}
 ```
 
-We take a look at the number of RNA molecules pr. cell vs. the number of genes. 
+We chose here to take a closer look at the distribution for the number of genes.
+
+```{r}
+densplot_gene
+```
+
+The red lines indicates the filtering threshold found to be reasonable across samples. The distributions of genes seem to be alike. 
+
+```{r}
+vlnplot_mito
+```
+
+The violin plot above shows the mitochondrial content for each cell across samples. A high mitochondrial content would indicate dying cells, so we will only keep cells with less that 10% mitochondrial content. We take a look at the number of RNA molecules pr. cell vs. the number of genes.
 
 ```{r}
 qcPlotScatter <- function(data, feature1, feature2, feature_name, threshold){
@@ -370,7 +493,6 @@ qcPlotScatter <- function(data, feature1, feature2, feature_name, threshold){
                      sep = " "),
        colour = "Sample") +
   scale_colour_discrete(labels = LETTERS[1:5]) + 
-  #stat_cor(method = "pearson", label.x = 10000, label.y = 3000)
   theme_bw() +
   geom_vline(xintercept = c(threshold[1], threshold[2]),
              colour = "#CC3333") +
@@ -378,19 +500,28 @@ qcPlotScatter <- function(data, feature1, feature2, feature_name, threshold){
              colour = "#CC3333")
 }
 
-qcPlotScatter(melanoma_seu_obj, nCount_RNA, nFeature_RNA, c("Number of molecules", "Number of genes"), c(500, 12500, 100, 3000))
+scatterplot <- qcPlotScatter(melanoma_seu_obj, 
+                             nCount_RNA, 
+                             nFeature_RNA, 
+                             c("Number of molecules", "Number of genes"), 
+                             c(500, 12500, 300, 3000))
+
+ggsave(filename = "scatterplot_overall.png",
+         path = results_path,
+         plot = scatterplot)
 ```
 
-The number of molecules vs. genes seems to be nicely correlated. Data points in the bottom right corner would indicate low quality cells, where the same genes are being sequenced over and over again. Cells in the top left corner could be doublets resulting in a large number of detected genes. As we do not see any cells in these areas, the data quality overall seem fine. We filter the cells based on our QC metrics. We also remove all ribosomal genes. 
+The number of molecules vs. genes seems to be nicely correlated. Data points in the bottom right corner would indicate low quality cells, where the same genes are being sequenced over and over again. Cells in the top left corner could be doublets resulting in a large number of detected genes. As we do not see any cells in these areas, the data quality overall seem fine. We filter the cells based on our QC metrics. We also remove all ribosomal genes.
 
 ```{r}
 melanoma_seu_obj_filtered <- subset(melanoma_seu_obj,
-                  subset = nFeature_RNA > 100 & nFeature_RNA < 3000 & nCount_RNA > 500 & nCount_RNA < 12500 & percent_mt < 10)
+                                    subset = nFeature_RNA > 300 & nFeature_RNA < 3000 & nCount_RNA > 500 & nCount_RNA < 12500 & percent_mt < 10)
 
 melanoma_seu_obj_filtered <- melanoma_seu_obj_filtered[!grepl('^RP[SL]', rownames(melanoma_seu_obj_filtered)), ]
 
 melanoma_seu_obj_filtered
 ```
+
 Let us see how much the filtering step removed:
 
 ```{r}
@@ -413,29 +544,40 @@ print(paste("Cells removed: ",
 
 ## Doublet Identification
 
-We wish to identify doublets using the scDblFinder package, which gathers various methods for the detection and handling of doublets. We will use the computeDoubletDensity approach, where we obtain a doublet score for each cell based on the density of simulated doublets around it. 
+We wish to identify doublets using the scDblFinder package, which gathers various methods for the detection and handling of doublets. We will use the computeDoubletDensity approach, where we obtain a doublet score for each cell based on the density of simulated doublets around it.
 
-### Normalization and Identification of Highly Variable Features
+### Normalization
 
-Before doublet detection, we must normalize and find variable features according to the standard Seurat workflow. 
+Before doublet detection, we must normalize and find variable features according to the standard Seurat workflow. The counts are normalized by dividing the count for each gene pr. cell by the total counts for that cell and multiplied by a scale factor. This is then log transformed using the natural log. 
 
 ```{r}
-# Normalize
 melanoma_seu_obj_filtered <- NormalizeData(melanoma_seu_obj_filtered,
                                            normalization.method = "LogNormalize",
                                            scale.factor = 10000)
-# Find highly variable features
+```
+
+### Identification of Highly Variable Features
+
+We find a subset of features that exhibit high cell-to-cell variation in the dataset. These genes are thought be the most biological relevant genes, and by focussing on these features the computations will become more efficient in the downstream analysis. We choose to find the 2000 most variable genes, which is the default value for the FindVariableFeatures function.
+
+```{r}
 melanoma_seu_obj_filtered <- FindVariableFeatures(melanoma_seu_obj_filtered,
                                                   selection.method = "vst",
                                                   nfeatures = 2000)
-# Scale 
+```
+
+### Scale Data
+
+The normalized counts for the variable genes are scaled, that is, the mean expression across cells becomes 0 and the variance across cells is 1. This step is a standard step prior to dimensional reduction techniques. 
+
+```{r}
 melanoma_seu_obj_filtered <- ScaleData(melanoma_seu_obj_filtered,
                                        features = VariableFeatures(object = melanoma_seu_obj_filtered))
 ```
 
 ### Dimensionality Reduction
 
-To visualize the data in an UMAP plot later on, linear dimensional reduction is performed. 
+To visualize the data in an UMAP plot later on, linear dimensional reduction, PCA, is performed. 
 
 ```{r}
 melanoma_seu_obj_filtered <- RunPCA(melanoma_seu_obj_filtered,
@@ -444,22 +586,28 @@ melanoma_seu_obj_filtered <- RunPCA(melanoma_seu_obj_filtered,
 ElbowPlot(melanoma_seu_obj_filtered, reduction = "pca")
 ```
 
-From the elbow plot, we should be fine with using above 20 dimensions. 
+From the elbow plot, we should be fine with using above 20 dimensions.
 
 ```{r}
 melanoma_seu_obj_filtered <- RunUMAP(melanoma_seu_obj_filtered, dims = 1:30)
 ```
 
-OVERVEJ OM MAN VIL SE DIM PLOT HER...
+The current steps are saved.
 
 ```{r}
-#DimPlot(melanoma_seu_obj_filtered, reduction = "umap")
+saveRDS(melanoma_seu_obj_filtered, file = paste(data_path,
+                                       "seurat_data/melanoma_seu_obj_filtered.rds",
+                                       sep = "/"))
 ```
 
-OVERVEJ OM DETTE SAVE SKAL VÆRE SENERE!
+### Doublet Score
+
+First, the Seurat object with the filtered data is loaded to the enviroment.
 
 ```{r}
-saveRDS(melanoma_seu_obj_filtered, file = "melanoma_seu_obj_filtered.rds")
+melanoma_seu_obj <- readRDS(paste(data_path,
+                                  "seurat_data/melanoma_seu_obj_filtered.rds", 
+                                  sep="/"))
 ```
 
 We convert the seurat object to a sce object and save the variable features to be used for doublet detection.
@@ -470,17 +618,15 @@ melanoma_sce <- as.SingleCellExperiment(melanoma_seu_obj_filtered)
 melanoma_sce_top_var <- VariableFeatures(melanoma_seu_obj_filtered)
 ```
 
-### Doublet Score
-
 Doublet scores are computed with computeDoubletDensity described in
 
-https://rdrr.io/github/plger/scDblFinder/man/computeDoubletDensity.html
+<https://rdrr.io/github/plger/scDblFinder/man/computeDoubletDensity.html>
 
 The procedure is as follows:
 
-1) A number of doublets (controlled by the parameter "niters" computeDoubletDensity) are simulated by adding the count vectors for two randomly chosen cells in the count matrix.
+1)  A number of doublets (controlled by the parameter "niters" computeDoubletDensity) are simulated by adding the count vectors for two randomly chosen cells in the count matrix.
 
-2) In a low-dimensional space after a PCA on the log-normalized expression matrix, the density of neighboring artificial doublets for each cell is computed and compared to the density of neighboring original cells to yield a doublet score.
+2)  In a low-dimensional space after a PCA on the log-normalized expression matrix, the density of neighboring artificial doublets for each cell is computed and compared to the density of neighboring original cells to yield a doublet score.
 
 ```{r}
 melanoma_sce_dbl_dens <- computeDoubletDensity(melanoma_sce,
@@ -490,13 +636,19 @@ melanoma_sce_dbl_dens <- computeDoubletDensity(melanoma_sce,
 melanoma_sce$DoubletScore <- melanoma_sce_dbl_dens
 ```
 
-We visualize the cells in a UMAP plot colored by the doublet score. 
+We visualize the cells in a UMAP plot colored by the doublet score.
 
 ```{r}
-plotUMAP(melanoma_sce, colour_by="DoubletScore")
+umapplot_doubletscore <- plotUMAP(melanoma_sce, colour_by="DoubletScore")
+
+ggsave(filename = "umapplot_doubletscore.png",
+         path = results_path,
+         plot = umapplot_doubletscore)
+
+umapplot_doubletscore
 ```
 
-As expected, cells with a high doublet score tend to cluster together. 
+As expected, cells with a high doublet score tend to cluster together.
 
 ### Doublet Thresholding
 
@@ -537,42 +689,60 @@ melanoma_seu_obj_filtered <- AddMetaData(object = melanoma_seu_obj_filtered,
 Let us look at the results.
 
 ```{r}
-# We call many doublets in HTO classification compared to doublet finder.
-table(melanoma_seu_obj_filtered@meta.data$doublet_call, melanoma_seu_obj_filtered@meta.data$HTO_classification.global)
+melanoma_cell_status <- melanoma_seu_obj_filtered@meta.data
+melanoma_cell_status$HTO_classification.global <- factor(melanoma_cell_status$HTO_classification.global,
+                                                         levels = c("Singlet", "Doublet", "Negative"))
+melanoma_cell_status$doublet_call <- factor(melanoma_cell_status$doublet_call,
+                                                         levels = c("singlet", "doublet"),
+                                            labels = c("Singlet", "Doublet"))
 
-# There are more doublets than singlets for some patients.
-# Negatives are mainly comming from patient 4 and 5. 
-table(melanoma_seu_obj_filtered@meta.data$HTO_classification.global, melanoma_seu_obj_filtered@meta.data$patient_id)
+label(melanoma_cell_status$HTO_classification.global) <- "HTODemux Classification"   
+label(melanoma_cell_status$doublet_call) <- "scDblFinder Classification"   
 
-# Removing close to equal proportion of cells
-table(melanoma_seu_obj_filtered@meta.data$doublet_call, melanoma_seu_obj_filtered@meta.data$patient_id)
-
-# Removing close to equal proportion of cells. Shouldn't the rate of doublets be the same across experiments. 
-table(melanoma_seu_obj_filtered@meta.data$doublet_call, melanoma_seu_obj_filtered@meta.data$orig.ident)
+table1(data = melanoma_cell_status, 
+       ~ doublet_call | HTO_classification.global,
+       caption = "HTODemux Classification")
 ```
+
+77.1% of the cells being identified as doublets by HTODemux are classified as singlets from doublet identification by the scDblFinder. Let us see the results for each patient.
 
 ```{r}
-# Extract singlet cell indices
-melanoma_singlet_indices <- which(melanoma_sce_dbl.calls == "singlet")
-
-# Filter out doublets from the original Seurat object
-melanoma_seu_obj_preproc <- melanoma_seu_obj_filtered[, melanoma_singlet_indices]
-
-saveRDS(melanoma_seu_obj_preproc, paste(path, "melanoma_seu_obj_preprocessed.rds", sep = ""))
+table1(data = melanoma_cell_status, 
+       ~ doublet_call + HTO_classification.global | patient_id,
+       caption = "Patient ID")
 ```
 
+For the scDbl classification, the rate of doublets pr. patient is between 7.4 - 37.1%, so the doublets seem to be somewhat distributed equally across patients. However, from the HTO classification we see around 70% of the cells from patient 1, 3, and 8 being called as doublets. Meanwhile, the negative cells mainly arise from patient 5 and to less extent patient 4. 
 
-
-### Cell Hashing
-
-We start out filtering out doublets and negative cells from the HTO information.
+We choose to remove the doublets identified by the doublet score.
 
 ```{r}
-melanoma_seu_obj <- subset(melanoma_seu_obj, 
-                           subset = HTO_classification.global == "Singlet")
+melanoma_seu_obj_preprocessed <- subset(melanoma_seu_obj_filtered,
+                                        subset = doublet_call == "singlet")
 
-melanoma_seu_obj
+
+print(paste("Genes removed: ", 
+            dim(melanoma_seu_obj_filtered)[1] - dim(melanoma_seu_obj_preprocessed)[1], 
+            " (",
+            round((dim(melanoma_seu_obj_filtered)[1] - dim(melanoma_seu_obj_preprocessed)[1])/dim(melanoma_seu_obj_filtered)[1] * 100, 
+                  digits = 4),
+            "%)",
+      sep = ""))
+
+print(paste("Cells removed: ", 
+            dim(melanoma_seu_obj_filtered)[2] - dim(melanoma_seu_obj_preprocessed)[2], 
+            " (",
+            round((dim(melanoma_seu_obj_filtered)[2] - dim(melanoma_seu_obj_preprocessed)[2])/dim(melanoma_seu_obj_filtered)[2] * 100, 
+                  digits = 4),
+            "%)",
+      sep = ""))
 ```
 
-Consider to remove genes that are not expressed in at least xx cells
+The final Seurat object is saved.
 
+```{r}
+saveRDS(melanoma_seu_obj_preprocessed, 
+        file = paste(data_path,
+                     "seurat_data/melanoma_seu_obj_preprocessed.rds",
+                     sep = "/"))
+```
