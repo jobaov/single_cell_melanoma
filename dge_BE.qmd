@@ -1,0 +1,314 @@
+---
+title: "DGE 10xRNA_H-melanoma-PBMC-gdT-A"
+format: html
+editor: visual
+---
+
+## Preparation
+
+### Setup
+
+Relevant libraries are loaded.
+
+```{r, message = false}
+library(Seurat)
+library(tidyverse)
+library(stringr)
+library(patchwork)
+library(ggplot2)
+library(SingleCellExperiment)
+library(scDblFinder)
+library(DESeq2)
+library(scater)
+library(table1)
+library(readxl)
+```
+
+Define relevant paths.
+
+```{r}
+# johanne
+#data_path <- "/Volumes/Department/Sund/Public/T-Cell-Signalling-and-Development/VB Lab/10x_data/SpecialProject/10xRNA_H-melanoma-PBMC-gdT/data"
+
+#results_path <- "/Volumes/Department/Sund/Public/T-Cell-Signalling-and-Development/VB Lab/10x_data/SpecialProject/10xRNA_H-melanoma-PBMC-gdT/results/dge"
+
+#Helene
+path <- "o:/Public/T-Cell-Signalling-and-Development/VB Lab/10x_data/SpecialProject/10xRNA_H-melanoma-PBMC-gdT/code"
+
+data_path <- "o:/Public/T-Cell-Signalling-and-Development/VB Lab/10x_data/SpecialProject/10xRNA_H-melanoma-PBMC-gdT/data"
+
+results_path <- "o:/Public/T-Cell-Signalling-and-Development/VB Lab/10x_data/SpecialProject/10xRNA_H-melanoma-PBMC-gdT/results"
+
+```
+
+### Data Load
+
+Load the integrated data.
+
+```{r}
+melanoma_seu_obj_annotated <- readRDS(paste(data_path,
+                                             "seurat_data/melanoma_seu_obj_annotated.rds",
+                                             sep="/"))
+```
+
+```{r}
+table(melanoma_seu_obj_annotated@meta.data$Cell_ann)
+```
+
+## DGE between baseline and eval
+```{r}
+melanoma_seu_obj_annotated$id <- paste0(melanoma_seu_obj_annotated$timepoint,
+                                        melanoma_seu_obj_annotated$patient_id)
+```
+
+Aggregate counts to sample level (creating psuedobulk)
+
+```{r}
+
+counts_all <- AggregateExpression(melanoma_seu_obj_annotated, 
+                              group.by = c("id"),
+                              assays =  "RNA",
+                              return.seurat = FALSE)
+
+counts_all <- counts_all$RNA
+
+counts_all.t <- t(counts_all)
+
+counts_all.t <- as.data.frame(counts_all.t)
+
+```
+
+Create deseq object and run DESeq function
+```{r}
+colData <- data.frame(samples = colnames(counts_all.t))
+
+colData <- colData %>%
+  mutate(condition = ifelse(grepl('Eval', samples), "Eval", "Baseline")) %>%
+  column_to_rownames(var = 'samples')
+
+dds <- DESeqDataSetFromMatrix(countData = counts_all.t,
+                              colData = colData,
+                              design = ~ condition)
+
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+
+dds <- DESeq(dds)
+
+resultsNames(dds)
+```
+
+Extract results
+get name from resultsNames
+```{r}
+res_all <- results(dds, name = "condition_Eval_vs_Baseline")
+
+summary(res_all)
+
+res_tbl_all <- res %>%
+  data.frame() %>%
+  rownames_to_column(var = "gene") %>%
+  as_tibble() %>%
+  arrange(padj)
+
+# Check results output
+res_tbl_all
+```
+Check significance
+```{r}
+# Set thresholds
+padj_cutoff <- 0.1
+
+# Subset the significant results
+sig_res <- dplyr::filter(res_tbl_all, padj < padj_cutoff) %>%
+  dplyr::arrange(padj)
+
+# Check significant genes output
+sig_res
+```
+
+
+## DGE for VD cell types between baseline and eval.
+```{r}
+# Aggregate counts to sample level
+counts_CA <- AggregateExpression(melanoma_seu_obj_annotated, 
+                              group.by = c("Cell_ann", "id"),
+                              assays =  "RNA",
+                              return.seurat = FALSE)
+
+counts_CA <- counts_CA$RNA
+
+counts_CA.t <- t(counts_CA)
+
+counts_CA.t <- as.data.frame(counts_CA.t)
+
+splitRows <- gsub('_.*', '', rownames(counts_CA.t))
+
+# get data per cell type
+cts.split <- split.data.frame(counts_CA.t,
+                              f = factor(splitRows))
+
+cts.split.modified <- lapply(cts.split, function(x){
+  rownames(x) <- gsub('.*_(.*)', '\\1', rownames(x))
+  t(x)
+  
+})
+```
+
+
+## DGE for VD2 
+```{r}
+counts_VD2 <- cts.split.modified$VD2
+
+colData <- data.frame(samples = colnames(counts_VD2))
+
+colData <- colData %>%
+  mutate(condition = ifelse(grepl('Eval', samples), "Eval", "Baseline")) %>%
+  column_to_rownames(var = 'samples')
+
+dds <- DESeqDataSetFromMatrix(countData = counts_VD2,
+                              colData = colData,
+                              design = ~ condition)
+
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+
+dds <- DESeq(dds)
+
+resultsNames(dds)
+```
+
+
+Extract results
+get name from resultsNames
+```{r}
+res <- results(dds, name = "condition_Eval_vs_Baseline")
+res2 <- as.data.frame(res)
+
+summary(res)
+
+res_tbl <- res %>%
+  data.frame() %>%
+  rownames_to_column(var = "gene") %>%
+  as_tibble() %>%
+  arrange(padj)
+
+# Check results output
+res_tbl 
+```
+
+Check significance
+```{r}
+# Set thresholds
+padj_cutoff <- 0.1
+
+# Subset the significant results
+sig_res <- dplyr::filter(res_tbl, padj < padj_cutoff) %>%
+  dplyr::arrange(padj)
+
+# Check significant genes output
+sig_res
+```
+## DGE for VD1
+```{r}
+counts_VD1 <- cts.split.modified$VD1
+
+colData <- data.frame(samples = colnames(counts_VD1))
+
+colData <- colData %>%
+  mutate(condition = ifelse(grepl('Eval', samples), "Eval", "Baseline")) %>%
+  column_to_rownames(var = 'samples')
+
+dds_VD1 <- DESeqDataSetFromMatrix(countData = counts_VD1,
+                              colData = colData,
+                              design = ~ condition)
+
+keep <- rowSums(counts(dds_VD1)) >= 10
+dds_VD1 <- dds[keep,]
+
+dds_VD1 <- DESeq(dds_VD1)
+
+resultsNames(dds_VD1)
+```
+
+Extract results
+get name from resultsNames
+```{r}
+res_VD1 <- results(dds_VD1, name = "condition_Eval_vs_Baseline")
+
+summary(res_VD1)
+
+res_tbl_VD1 <- res_VD1 %>%
+  data.frame() %>%
+  rownames_to_column(var = "gene") %>%
+  as_tibble() %>%
+  arrange(padj)
+
+# Check results output
+res_tbl_VD1
+```
+
+Check significance
+```{r}
+# Set thresholds
+padj_cutoff <- 0.1
+
+# Subset the significant results
+sig_res <- dplyr::filter(res_tbl_VD1, padj < padj_cutoff) %>%
+  dplyr::arrange(padj)
+
+# Check significant genes output
+sig_res
+```
+
+## DGE for VD3
+```{r}
+counts_VD3 <- cts.split.modified$VD3
+
+colData <- data.frame(samples = colnames(counts_VD3))
+
+colData <- colData %>%
+  mutate(condition = ifelse(grepl('Eval', samples), "Eval", "Baseline")) %>%
+  column_to_rownames(var = 'samples')
+
+dds_VD3 <- DESeqDataSetFromMatrix(countData = counts_VD3,
+                              colData = colData,
+                              design = ~ condition)
+
+keep <- rowSums(counts(dds_VD3)) >= 10
+dds_VD3 <- dds[keep,]
+
+dds_VD3 <- DESeq(dds_VD3)
+
+resultsNames(dds_VD3)
+```
+
+Extract results
+get name from resultsNames
+```{r}
+res_VD3 <- results(dds_VD3, name = "condition_Eval_vs_Baseline")
+
+summary(res_VD3)
+
+res_tbl_VD3 <- res_VD3 %>%
+  data.frame() %>%
+  rownames_to_column(var = "gene") %>%
+  as_tibble() %>%
+  arrange(padj)
+
+# Check results output
+res_tbl_VD3
+```
+
+Check significance
+```{r}
+# Set thresholds
+padj_cutoff <- 0.1
+
+# Subset the significant results
+sig_res <- dplyr::filter(res_tbl_VD3, padj < padj_cutoff) %>%
+  dplyr::arrange(padj)
+
+# Check significant genes output
+sig_res
+```

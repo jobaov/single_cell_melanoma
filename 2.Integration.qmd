@@ -21,6 +21,7 @@ library(scDblFinder)
 library(DESeq2)
 library(scater)
 library(table1)
+library(clustree)
 ```
 
 ```{r}
@@ -73,9 +74,7 @@ DimPlot(melanoma_seu_obj_preproc, group.by = "RNA_snn_res.0.5", label = TRUE, re
 DimPlot(melanoma_seu_obj_preproc, group.by = "RNA_snn_res.0.7", label = TRUE, reduction = "umap")
 ```
 
-## Integrating samples
-
-The clustering are first visualized by coloring the clustering by experiment, to see if the clustering are performed on a technical variation (batch effects) rather than on biological variation.
+The clustering is first visualized by coloring the clustering by experiment, to see if the clustering are performed on a technical variation (batch effects) rather than on biological variation.
 
 ```{r}
 #Visualize Umap grouped by "batch effect"
@@ -91,33 +90,29 @@ ggsave("Non_integrated_experiment_split_res0.2.png", Non_integrated_experiment_s
 
 DimPlot(melanoma_seu_obj_preproc, reduction = "umap", group.by = "HTO_maxID")
 
-
-#Split the dataset into a list of Seurat objects.
-#Normalize and identify variable features for each group independently.
-
-
-
 ```
+
+The clustering before integration shows that the samples might be clustering according to the lane (experiment). This is because the variation in the data is dominated by the technical variation in the lanes, instead of the biological variation, which would make the samples cluster according to the cell types, this is the purpose of integration to correct for the batch effect introduced from having samples from different lanes.
+
+## Integrating samples
 
 The data are split according to the experiments, then for each experiment are the data normalized and the highly variable features are found.
 
-The integration works by: - Features are chosen by ranking the number of samples they are variable in. - The anchors are found by identifying pairs of mutual nearest neighbors, these represent cells in a shared biological state and will guide the integration - Then perform the integration by computing correction vectors for each cell.
+The integration works by:
+
+-   Features are chosen by ranking the number of samples they are variable in.
+
+-   The anchors are found by identifying pairs of mutual nearest neighbors, these represent cells in a shared biological state and will guide the integration
+
+-   Then perform the integration by computing correction vectors for each cell.
 
 ```{r}
-#Add group to split by
 obj.list <- SplitObject(melanoma_seu_obj_preproc, split.by = "orig.ident")
 
 for(i in 1:length(obj.list)){
   obj.list[[i]] <- NormalizeData(object = obj.list[[i]])
   obj.list[[i]]<- FindVariableFeatures(object = obj.list[[i]])
 }
-
-
-#Speed up integration, by running as parallel session
-#library(future)
-#plan("multisession", workers = 4)
-options(future.globals.maxSize = 8000 * 1024^2)
-
 
 features <- SelectIntegrationFeatures(object.list = obj.list)
 
@@ -128,12 +123,14 @@ melanoma_seu_obj_integrated <- IntegrateData(anchorset = anchors)
 
 
 DefaultAssay(melanoma_seu_obj_integrated) <- "integrated"
-#saveRDS(melanoma_seu_obj_integrated, paste(data_path, "/seurat_data/melanoma_seu_obj_integrated.rds", sep = ""))
+saveRDS(melanoma_seu_obj_integrated, paste(data_path, "/seurat_data/melanoma_seu_obj_integrated.rds", sep = ""))
 
-#read integrated data
-#melanoma_seu_obj_integrated <- readRDS(paste(data_path, "/seurat_data/melanoma_seu_obj_integrated.rds", sep = ""))
+```
 
-#plan("sequential")
+(Read in the integrated data)
+
+```{r}
+melanoma_seu_obj_integrated <- readRDS(paste(data_path, "/seurat_data/melanoma_seu_obj_integrated.rds", sep = ""))
 ```
 
 Scale the integrated data and perform the clustering again on the now integrated data
@@ -150,9 +147,9 @@ melanoma_seu_obj_integrated <- FindNeighbors(melanoma_seu_obj_integrated, dims =
 melanoma_seu_obj_integrated <- FindClusters(melanoma_seu_obj_integrated, resolution = c(0.1, 0.2, 0.25, 0.3, 0.4))
 ```
 
-```{r}
-# Visualize the new clustering with a UMAP split by the batch corrected group.
+Visualize the new clustering with a UMAP split by the batch corrected group.
 
+```{r}
 melanoma_seu_obj_integrated <- RunUMAP(melanoma_seu_obj_integrated, dims = 1:30)
 
 DimPlot(melanoma_seu_obj_integrated, reduction = "umap")
@@ -161,7 +158,7 @@ umap_integrated_experiment <- DimPlot(melanoma_seu_obj_integrated,
                                       group.by = "orig.ident",
                                       label = TRUE)
 umap_integrated_experiment
-#ggsave("umap_integrated_experiment.png", umap_integrated_experiment, path= paste(results_path, "Integration", sep = ""))
+ggsave("umap_integrated_experiment.png", umap_integrated_experiment, path= paste(results_path, "Integration", sep = "/"))
 
 #umap_integrated_disease <- DimPlot(melanoma_seu_obj_integrated,
  #                                  split.by = "HTO_maxID",
@@ -173,8 +170,6 @@ umap_integrated_experiment
 ### Determine clustering resolution using clustree
 
 ```{r}
-library(clustree)
-
 clustering_tree_res <- clustree(melanoma_seu_obj_integrated, prefix = "integrated_snn_res.")
 clustering_tree_res
 ggsave("clustree_low_res.png", clustering_tree_res, path= paste(results_path, "integration", sep = "/"))
@@ -193,66 +188,58 @@ umap_res_0.2
 umap_res_0.3
 ```
 
+From the clustering tree we determine the best resolution for the clustering to be 0.3.
+
 ```{r}
-
-# set idents to the best resolution
 Idents(melanoma_seu_obj_integrated) <- "integrated_snn_res.0.3"
-
-# Identify conserved cell type markers to identify the cell types corresponding to the remaining clusters
-
-#Identify conserved cell type markers
-DefaultAssay(melanoma_seu_obj_integrated) <- "RNA"
-
-seurat_joinlayer <- JoinLayers(melanoma_seu_obj_integrated)
-
-cluster7_conserved_markers <- FindConservedMarkers(seurat_joinlayer,
-                                                   ident.1 = 7,
-                                                   grouping.var = "response",
-                                                   only.pos = TRUE, min.pct = 0.25,  min.diff.pct = 0.25,
-                                                   logfc.threshold = 0.25)
-
-cluster6_conserved_markers <- FindConservedMarkers(seurat_joinlayer,
-                                                   ident.1 = 6,
-                                                   grouping.var = "response",
-                                                   only.pos = TRUE, min.pct = 0.25,  min.diff.pct = 0.25,
-                                                   logfc.threshold = 0.25)
-
-cluster5_conserved_markers <- FindConservedMarkers(seurat_joinlayer,
-                                                   ident.1 = 5,
-                                                   grouping.var = "response",
-                                                   only.pos = TRUE, min.pct = 0.25,  min.diff.pct = 0.25,
-                                                   logfc.threshold = 0.25)
-
-cluster4_conserved_markers <- FindConservedMarkers(seurat_joinlayer,
-                                                   ident.1 = 4,
-                                                   grouping.var = "response",
-                                                   only.pos = TRUE, min.pct = 0.25,  min.diff.pct = 0.25,
-                                                   logfc.threshold = 0.25)
-
-cluster3_conserved_markers <- FindConservedMarkers(seurat_joinlayer,
-                                                   ident.1 = 3,
-                                                   grouping.var = "response",
-                                                   only.pos = TRUE, min.pct = 0.25,  min.diff.pct = 0.25,
-                                                   logfc.threshold = 0.25)
-
-cluster2_conserved_markers <- FindConservedMarkers(seurat_joinlayer,
-                                                   ident.1 = 2,
-                                                   grouping.var = "response",
-                                                   only.pos = TRUE, min.pct = 0.25,  min.diff.pct = 0.25,
-                                                   logfc.threshold = 0.25)
-
-cluster1_conserved_markers <- FindConservedMarkers(seurat_joinlayer,
-                                                   ident.1 = 1,
-                                                   grouping.var = "response",
-                                                   only.pos = TRUE, min.pct = 0.25,  min.diff.pct = 0.25,
-                                                   logfc.threshold = 0.25)
-
-cluster0_conserved_markers <- FindConservedMarkers(seurat_joinlayer,
-                                                   ident.1 = 0,
-                                                   grouping.var = "response",
-                                                   only.pos = TRUE, min.pct = 0.25,  min.diff.pct = 0.25,
-                                                   logfc.threshold = 0.25)
 ```
+
+## Cell annotation
+
+### Feature plots
+
+Explore expression of delta and gamma chains, to guide cell annotation
+
+```{r}
+# Extract gene symbols for delta and gamma chains.
+delta_chain <- all_genes[(str_detect(all_genes, "TRDV"))]
+gamma_chain <- all_genes[(str_detect(all_genes, "TRGV"))]
+
+# Ignore clustering results.
+Idents(melanoma_seu_obj_integrated) <- ""
+
+deltaP <- FeaturePlot(melanoma_seu_obj_integrated,
+                      reduction = "umap",
+                      features = delta_chain,
+                      min.cutoff = 'q10',
+                      label = TRUE) 
+
+gammaP <- FeaturePlot(melanoma_seu_obj_integrated,
+                      reduction = "umap",
+                      features = gamma_chain,
+                      order = TRUE,
+                      min.cutoff = 'q10',
+                      label = TRUE) 
+Idents(melanoma_seu_obj_integrated) <- melanoma_seu_obj_integrated@meta.data$orig.ident
+```
+
+Save the files.
+
+```{r}
+ggsave(filename = "featureplot_TRD.png",
+       path = results_path,
+       plot = deltaP)
+
+ggsave(filename = "featureplot_TRG.png",
+       path = results_path,
+       plot = gammaP,
+       width = 20, 
+       height = 12)
+```
+
+### Conserved markers in clusters
+
+Explore conserved markers in one cluster compared to all others, to guide cell annotation
 
 ```{r}
 cluster7_markers <- FindMarkers(seurat_joinlayer,
@@ -296,10 +283,9 @@ cluster0_markers <- FindMarkers(seurat_joinlayer,
                                                    logfc.threshold = 0.25)
 ```
 
-```{r}
-# Rename all identities
+Rename clusters to the discovered cell type. Cluster 0, 1 and 2 are un-annotated (UANN) since there is no clear pattern of delta chain expression.
 
-#Cluster 0, 1 and 2 are biologically uncharacterized activated T-cells
+```{r}
 melanoma_seu_obj_integrated <- RenameIdents(object = melanoma_seu_obj_integrated,
                                 "0" = "VD2",
                                 "1" = "VD1",
@@ -314,13 +300,11 @@ melanoma_seu_obj_integrated <- RenameIdents(object = melanoma_seu_obj_integrated
 # Create a new column in metadata with cell type annotations from idents
 melanoma_seu_obj_integrated@meta.data$Cell_ann <- Idents(melanoma_seu_obj_integrated)
 
-saveRDS(melanoma_seu_obj_integrated, paste(data_path, "seurat_data/melanoma_seu_obj_annotated.rds", sep = "/"))
 ```
 
-Visualize the data with annotations
+## Visualize the data with cell type annotations
 
 ```{r}
-# visualize data
 clusters <- DimPlot(melanoma_seu_obj_integrated, reduction = 'umap', label = TRUE)
 ggsave("cell_type_clusters.png", clusters, path= paste(results_path, "cell_annotation", sep = "/"))
 
@@ -339,4 +323,10 @@ ggsave("patient_split_cellann.png", patient_cell, path= paste(results_path, "cel
 respond_group
 
 clusters
+```
+
+Save the annotated seurat object
+
+```{r}
+saveRDS(melanoma_seu_obj_integrated, paste(data_path, "seurat_data/melanoma_seu_obj_annotated.rds", sep = "/"))
 ```

@@ -45,21 +45,19 @@ The preprocessed data containing all experiments are loaded.
 melanoma_seu_obj_ann <- readRDS(paste(data_path, "/seurat_data/melanoma_seu_obj_annotated.rds", sep = ""))
 ```
 
-```{r}
-melanoma_seu_obj_ann <- melanoma_seu_obj_integrated
-```
-
 ### Differential abundance (DA) between responders
-In DA analysis the purpose is to test for significant changes per identified cell type across conditions. DA analysis can reveal cell types that are depleted or enriched when comparing conditions.
-The tool DCAT is used, which inputs a misclassification matrix, count matrix and design matrix to a glm model that then return statistical measurement for each cell type, checking if there are a significant enrichment of cell types in one condition compared to the others.
+
+In DA analysis the purpose is to test for significant changes per identified cell type across conditions. DA analysis can reveal cell types that are depleted or enriched when comparing conditions. The tool DCAT is used, which inputs a misclassification matrix, count matrix and design matrix to a glm model that then return statistical measurement for each cell type, checking if there are a significant enrichment of cell types in one condition compared to the others.
 
 The misclassification matrix can be obtained in different ways, here by using the graph based approach with the knn_simMat function
+
 ```{r}
 knn_mat = knn_simMat(melanoma_seu_obj_ann@graphs$integrated_snn, melanoma_seu_obj_ann$Cell_ann)
 knn_mat
 ```
 
 The count matrix contain the number of cells for each cell type in each patient
+
 ```{r}
 melanoma_seu_obj_ann$id <- paste0(melanoma_seu_obj_ann$response, melanoma_seu_obj_ann$patient_id)
 
@@ -68,6 +66,7 @@ count_mat
 ```
 
 The design matrix contain the "condition" for each patient
+
 ```{r}
 condition_vector <- rep(c("CR", "PD"), each = 5)
 melanoma_design <- data.frame(condition = condition_vector)
@@ -75,6 +74,7 @@ melanoma_design
 ```
 
 The three matrices are input to the glm model and the results are summarized in a dataframe
+
 ```{r}
 results_DA <- dcats_GLM(count_mat, melanoma_design, knn_mat)
 
@@ -94,35 +94,51 @@ DCAT_data
 
 ```{r}
 # Create a volcano plot with labels and save
-volcanoplot <- ggplot(DCAT_data, aes(x = log_fold_change, y = neg_log10_p_value, label = cell_type)) +
-  geom_point(aes(color = factor(results_DA$fdr[, 1] < 0.05)), size = 3) +
+volcanoplot_CRPD <- ggplot(DCAT_data, aes(x = log_fold_change, y = neg_log10_p_value, label = cell_type)) +
+  geom_point(aes(color = factor(results_DA$fdr[, 1] < 0.1)), size = 3) +
   geom_text_repel(aes(label = cell_type), box.padding = 0.5, point.padding = 0.1, size = 3) +
-  scale_color_manual(values = c("black", "red"), guide = FALSE) +
+  #scale_color_manual(values = c("black", "red"), guide = FALSE) +
   labs(
     title = "Progressive disease vs Complete responder",
     x = "Log-fold Change",
-    y = "-log10(p-value)"
+    y = "-log10(p-value)",
+    color = "Significant with FDR < 0.1"
   )
-volcanoplot
+  
+volcanoplot_CRPD
+ggsave("volcanoplot_CRPD.png", volcanoplot_CRPD, path= paste(results_path, "/Differential_analysis", sep = ""))
 ```
 
 ```{r}
 # Create dataframe with counts for each diseasegroup
-table_response <- table(melanoma_seu_obj_ann$response, melanoma_seu_obj_integrated$Cell_ann)
+table_response <- table(melanoma_seu_obj_ann$response, melanoma_seu_obj_ann$Cell_ann)
 df_response <- data.frame(table_response)
 df_response
 ```
 
+Lets look at the distribution of count in percentage for the two conditions
 ```{r}
-ggplot(df_response, aes(x = Var2, y= Freq, fill = Var1)) +
-  geom_bar(stat = 'identity')
+percentages <- prop.table(table_response, margin = 1) * 100
+df_percentages <- as.data.frame(percentages)
+df_percentages
+
+```
+```{r}
+DCA_CRPD_barplot <- ggplot(df_percentages, aes(x = Var2, y= Freq, fill = Var1)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Cell abundance for Complete responders vs Progressive disease",
+       x = "Cell type",
+       y = "Percentage [%]",
+       fill = "Response") +
+  theme_minimal() +
+  scale_fill_manual(values = c("dodgerblue3", "#CD6889"))
+ggsave("DCA_CRPD_barplot.png", DCA_CRPD_barplot, path= paste(results_path, "/Differential_analysis", sep = ""))
 ```
 
-
-
-
 ### Differential abundance between treatment
+
 The count matrix contain the number of cells for each cell type in each patient at baseline and eval timepoint
+
 ```{r}
 melanoma_seu_obj_ann$id_time <- paste0(melanoma_seu_obj_ann$timepoint, melanoma_seu_obj_ann$patient_id)
 
@@ -131,6 +147,7 @@ count_mat_BE
 ```
 
 The design matrix are now containing baseline and eval.
+
 ```{r}
 # Create design dataframe
 condition_vector_BE <- rep(c("Baseline", "Eval"), each = 10)
@@ -139,6 +156,7 @@ melanoma_design_BE
 ```
 
 The three matrices are input to the glm model and the results are summarized in a dataframe
+
 ```{r}
 results_DA_BE <- dcats_GLM(count_mat_BE, melanoma_design_BE, knn_mat)
 
@@ -156,24 +174,25 @@ DCAT_data_BE <- data.frame(
 DCAT_data_BE
 ```
 
-
 ```{r}
 # Create a volcano plot with labels and save
 volcanoplot_BE <- ggplot(DCAT_data_BE, aes(x = log_fold_change, y = neg_log10_p_value, label = cell_type)) +
-  geom_point(aes(color = factor(results_DA_BE$fdr[, 1] < 0.05)), size = 3) +
+  geom_point(aes(color = factor(results_DA_BE$fdr[, 1] < 0.1)), size = 3) +
   geom_text_repel(aes(label = cell_type), box.padding = 0.5, point.padding = 0.1, size = 3) +
-  scale_color_manual(values = c("black", "red"), guide = FALSE) +
+  #scale_color_manual(values = c("black", "red"), guide = FALSE) +
   labs(
     title = "Baseline vs Eval",
     x = "Log-fold Change",
-    y = "-log10(p-value)"
+    y = "-log10(p-value)",
+    color = "Significant with FDR < 0.1"
   )
 volcanoplot_BE
+ggsave("volcanoplot_BE.png", volcanoplot_BE, path= paste(results_path, "/Differential_analysis", sep = ""))
 ```
 
 ```{r}
 # Create dataframe with counts for each diseasegroup
-table_timepoint <- table(melanoma_seu_obj_ann$timepoint, melanoma_seu_obj_integrated$Cell_ann)
+table_timepoint <- table(melanoma_seu_obj_ann$timepoint, melanoma_seu_obj_ann$Cell_ann)
 df_timepoint <- data.frame(table_timepoint)
 df_timepoint
 ```
@@ -183,17 +202,115 @@ ggplot(df_timepoint, aes(x = Var1, y= Freq, fill = Var2)) +
   geom_bar(stat = 'identity')
 ```
 
+Lets look at the distribution of count in percentage for the two conditions
+```{r}
+percentages_BE <- prop.table(table_timepoint, margin = 1) * 100
+df_percentages_BE <- as.data.frame(percentages_BE)
+df_percentages_BE
+
+```
+
+```{r}
+DCA_BE_barplot <- ggplot(df_percentages_BE, aes(x = Var2, y= Freq, fill = Var1)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Cell abundance for timepoint Baseline vs Eval",
+       x = "Cell type",
+       y = "Percentage [%]",
+       fill = "Timepoint") +
+  theme_minimal() +
+  scale_fill_manual(values = c("dodgerblue3", "#CD6889"))
+
+ggsave("DCA_BE_barplot.png", DCA_BE_barplot, path= paste(results_path, "/Differential_analysis", sep = ""))
+```
+
+## Differential abundance for Complete responders baseline and eval
+
+Subset the complete responders
+```{r}
+melanoma_seu_obj_ann_CR <- subset(melanoma_seu_obj_ann,
+                     subset = response == "CR")
+```
 
 
+The count matrix contain the number of cells for each cell type in each patient
+
+```{r}
+melanoma_seu_obj_ann_CR$id <- paste0(melanoma_seu_obj_ann_CR$timepoint, melanoma_seu_obj_ann_CR$patient_id)
+
+count_mat_CR = table(melanoma_seu_obj_ann_CR$id, melanoma_seu_obj_ann_CR$Cell_ann)
+count_mat_CR
+```
+
+The design matrix contain the "condition" for each patient
+
+```{r}
+condition_vector_CR <- rep(c("Baseline", "Eval"), each = 5)
+melanoma_design_CR <- data.frame(condition = condition_vector_CR)
+melanoma_design_CR
+```
+
+The three matrices are input to the glm model and the results are summarized in a dataframe
+
+```{r}
+results_DA_CR <- dcats_GLM(count_mat_CR, melanoma_design_CR, knn_mat)
+
+log_fold_changes <- results_DA_CR$ceoffs[, 1]
+p_values <- results_DA_CR$LRT_pvals[, 1]
+cell_types <- rownames(results_DA_CR$ceoffs)
+
+neg_log10_p_values <- -log10(p_values)
+
+DCAT_data_CR <- data.frame(
+  log_fold_change = log_fold_changes,
+  neg_log10_p_value = neg_log10_p_values,
+  cell_type = cell_types
+)
+DCAT_data_CR
+```
+
+```{r}
+# Create a volcano plot with labels and save
+volcanoplot_CR <- ggplot(DCAT_data_CR, aes(x = log_fold_change, y = neg_log10_p_value, label = cell_type)) +
+  geom_point(aes(color = factor(results_DA_CR$fdr[, 1] < 0.1)), size = 3) +
+  geom_text_repel(aes(label = cell_type), box.padding = 0.5, point.padding = 0.1, size = 3) +
+  #scale_color_manual(values = c("black", "red"), guide = FALSE) +
+  labs(
+    title = "Complete responders Baseline vs Eval ",
+    x = "Log-fold Change",
+    y = "-log10(p-value)",
+    color = "Significant with FDR < 0.1"
+  )
+  
+volcanoplot_CR
+#ggsave("volcanoplot_CRPD.png", volcanoplot_CRPD, path= paste(results_path, "/Differential_analysis", sep = ""))
+```
+
+```{r}
+# Create dataframe with counts for each diseasegroup
+table_response_CR <- table(melanoma_seu_obj_ann_CR$timepoint, melanoma_seu_obj_ann_CR$Cell_ann)
+df_response_CR <- data.frame(table_response_CR)
+df_response_CR
+```
+
+Lets look at the distribution of count in percentage for the two conditions
+```{r}
+percentages_CR <- prop.table(table_response_CR, margin = 1) * 100
+df_percentages_CR <- as.data.frame(percentages_CR)
+df_percentages_CR
+
+```
+
+```{r}
+DCA_CR_barplot <- ggplot(df_percentages_CR, aes(x = Var2, y= Freq, fill = Var1)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Complete responders Baseline vs Eval",
+       x = "Cell type",
+       y = "Percentage [%]",
+       fill = "Timepoint") +
+  theme_minimal() +
+  scale_fill_manual(values = c("dodgerblue3", "#CD6889"))
+DCA_CR_barplot
+#ggsave("DCA_CR_barplot.png", DCA_CRPD_barplot, path= paste(results_path, "/Differential_analysis", sep = ""))
 
 
-
-
-
-
-
-
-
-
-
-
+```
